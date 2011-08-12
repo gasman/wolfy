@@ -1,0 +1,24 @@
+wolfy
+
+a Wolfenstein 3D raycasting engine for the r0ket platform:
+https://r0ket.badge.events.ccc.de/
+
+WORK IN PROGRESS:
+currently we have vertical walls, but the projection is slightly glitchy
+
+build instructions:
+stick wolfy.c and wall.h into the firmware/l0dables directory
+of your r0ket codebase checkout, then follow the standard procedure
+for building a l0dable:
+
+cd firmware/l0dables
+make wolfy.c0d
+
+or for the simulat0r:
+cd simulat0r
+make APP=l0dable LAPP=wolfy
+
+png2cdata.py is a python script for converting wall.png to wall.h (requires PIL).
+
+Matt Westcott <matt@west.co.tt> - http://matt.west.co.tt/ - @westdotcodottt
+live at CCCamp2011
