@@ -11,6 +11,10 @@
 
 #include "wall.h" /* texture stored column-wise: pixel column 0 stored top-to-bottom, then pix column 1 etc */
 
+/* maths operations on 16.16 fixpoint values */
+#define FPMUL(a,b) ( (a)/0x100 ) * ( (b)/0x100 )
+#define FPDIV(a,b) ( (a) * 0x100 / (b) ) * 0x100
+
 static int player_x = 0x00048000; /* fixpoint 16.16 */
 static int player_y = 0x00048000;
 static int player_angle = 0x2000; /* scaled 0..32767 as per o_sin */
@@ -36,12 +40,10 @@ void ram(void)
 			case BTN_UP:
 				player_x += o_sin(player_angle)/4;
 				player_y -= o_cos(player_angle)/4;
-				//fprintf(stderr, "x,y=%08x,%08x\n", player_x, player_y);
 				break;
 			case BTN_DOWN:
 				player_x -= o_sin(player_angle)/4;
 				player_y += o_cos(player_angle)/4;
-				//fprintf(stderr, "x,y=%08x,%08x\n", player_x, player_y);
 				break;
 			case BTN_LEFT:
 				player_angle = (player_angle - 256) & 0x7fff;
@@ -81,24 +83,22 @@ static void render(void)
 		vy = -cos_pa + sin_pa * x / RESX - sin_pa/2;
 		
 		/* find where this crosses a vertical (integer x) */
-		if (vx > 0x0100) {
+		if (vx > 0x0010) {
 			xd_vert = 0x10000 - (player_x & 0xffff);
-			yd_vert = xd_vert * vy / vx;
-			yd_vert_squared = (yd_vert < 0 ? (-yd_vert >> 8) * (-yd_vert >> 8) : (yd_vert >> 8) * (yd_vert >> 8));
-			xd_vert_squared = (xd_vert < 0 ? (-xd_vert >> 8) * (-xd_vert >> 8) : (xd_vert >> 8) * (xd_vert >> 8));
+			yd_vert = FPMUL(xd_vert, FPDIV(vy, vx));
+			yd_vert_squared = FPMUL(yd_vert, yd_vert);
+			xd_vert_squared = FPMUL(xd_vert, xd_vert);
 			dist_vert = yd_vert_squared + xd_vert_squared;
-			dist_vert = iSqrt(dist_vert) << 8;
-			fprintf(stderr, "x = %d: ydistsq= %08x\n", x, yd_vert_squared);
+			dist_vert = iSqrt(dist_vert) * 256;
 			tex_vert = (player_y + yd_vert) & 0xffff;
 			tex_vert_pix = tex_vert * TEX_WIDTH >> 16;
-		} else if (vx < -0x0100) {
+		} else if (vx < -0x0010) {
 			xd_vert = (player_x & 0xffff);
-			yd_vert = xd_vert * vy / vx;
-			yd_vert_squared = (yd_vert < 0 ? (-yd_vert >> 8) * (-yd_vert >> 8) : (yd_vert >> 8) * (yd_vert >> 8));
-			xd_vert_squared = (xd_vert < 0 ? (-xd_vert >> 8) * (-xd_vert >> 8) : (xd_vert >> 8) * (xd_vert >> 8));
+			yd_vert = FPMUL(-xd_vert, FPDIV(vy, vx));
+			yd_vert_squared = FPMUL(yd_vert, yd_vert);
+			xd_vert_squared = FPMUL(xd_vert, xd_vert);
 			dist_vert = yd_vert_squared + xd_vert_squared;
-			dist_vert = iSqrt(dist_vert) << 8;
-			fprintf(stderr, "x = %d: ydistsq= %08x\n", x, yd_vert_squared);
+			dist_vert = iSqrt(dist_vert) * 256;
 
 			tex_vert = (player_y + yd_vert) & 0xffff;
 			tex_vert_pix = TEX_WIDTH - 1 - (tex_vert * TEX_WIDTH >> 16);
@@ -115,8 +115,6 @@ static void render(void)
 		tex_pos = (0x10000-distance) * TEX_HEIGHT/2; /* current texture y coordinate */
 		tex_step = distance * TEX_HEIGHT / RESY; /* increment to add to tex_pos per screen pixel */
 		
-		//fprintf(stderr, "x = %d: pos = %d, step = %d\n", x, tex_pos, tex_step);
-
 		buf = col_buf;
 		b = 0; /* byte to write to lcdBuffer will be assembled here */
 		bits_until_write = 8 - (RESY & 0x07); /* number of bits to add to b before we have a full byte to write to lcdBuffer */
