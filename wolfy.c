@@ -12,8 +12,11 @@
 #include "wall.h" /* texture stored column-wise: pixel column 0 stored top-to-bottom, then pix column 1 etc */
 
 /* maths operations on 16.16 fixpoint values */
-#define FPMUL(a,b) ( (a)/0x100 ) * ( (b)/0x100 )
-#define FPDIV(a,b) ( (a) * 0x100 / (b) ) * 0x100
+#define FPMUL(a,b) ( ( (a)/0x100 ) * ( (b)/0x100 ) )
+#define FPDIV(a,b) ( ( (a) * 0x100 / (b) ) * 0x100 )
+
+/* straight line distance given x/y deltas (i.e. pythagoras) */
+#define FPDISTANCE(x,y) ( iSqrt( FPMUL(x,x) + FPMUL(y,y) ) * 256 )
 
 static int player_x = 0x00048000; /* fixpoint 16.16 */
 static int player_y = 0x00048000;
@@ -67,10 +70,14 @@ static void render(void)
 	int vx, vy; /* view ray vector, fixpoint 16.16 */
 
 	int yd_vert, xd_vert; /* y and x distance to the nearest vertical wall, fixpoint 16.16 */
-	int xd_vert_squared, yd_vert_squared;
 	int tex_vert; /* x position within texture at which we hit the wall, fixpoint 16.16 */
 	int tex_vert_pix; /* tex_vert in pixel coordinates (0 to TEX_WIDTH) */
 	int dist_vert; /* distance to vertical wall */
+
+	int yd_horz, xd_horz; /* y and x distance to the nearest horizontal wall, fixpoint 16.16 */
+	int tex_horz; /* x position within texture at which we hit the wall, fixpoint 16.16 */
+	int tex_horz_pix; /* tex_horz in pixel coordinates (0 to TEX_WIDTH) */
+	int dist_horz; /* distance to horizontal wall */
 
 	sin_pa = o_sin(player_angle) << 4;
 	cos_pa = o_cos(player_angle) << 4;
@@ -86,31 +93,51 @@ static void render(void)
 		if (vx > 0x0010) {
 			xd_vert = 0x10000 - (player_x & 0xffff);
 			yd_vert = FPMUL(xd_vert, FPDIV(vy, vx));
-			yd_vert_squared = FPMUL(yd_vert, yd_vert);
-			xd_vert_squared = FPMUL(xd_vert, xd_vert);
-			dist_vert = yd_vert_squared + xd_vert_squared;
-			dist_vert = iSqrt(dist_vert) * 256;
+			dist_vert = FPDISTANCE(xd_vert, yd_vert);
+
 			tex_vert = (player_y + yd_vert) & 0xffff;
 			tex_vert_pix = tex_vert * TEX_WIDTH >> 16;
 		} else if (vx < -0x0010) {
 			xd_vert = (player_x & 0xffff);
 			yd_vert = FPMUL(-xd_vert, FPDIV(vy, vx));
-			yd_vert_squared = FPMUL(yd_vert, yd_vert);
-			xd_vert_squared = FPMUL(xd_vert, xd_vert);
-			dist_vert = yd_vert_squared + xd_vert_squared;
-			dist_vert = iSqrt(dist_vert) * 256;
+			dist_vert = FPDISTANCE(xd_vert, yd_vert);
 
 			tex_vert = (player_y + yd_vert) & 0xffff;
 			tex_vert_pix = TEX_WIDTH - 1 - (tex_vert * TEX_WIDTH >> 16);
 		} else {
 			/* view vector is vertical (or close enough) - crossing point is at infinity */
-			dist_vert = 0x800000;
-			yd_vert = 0;
+			dist_vert = 0x8000000;
 			tex_vert_pix = 0;
 		}
 		
-		wall_line = wall + ( tex_vert_pix * 8 ); /* pointer to the texture column to use in this screen column */
-		distance = dist_vert;
+		/* find where this crosses a horizontal (integer y) */
+		if (vy > 0x0010) {
+			yd_horz = 0x10000 - (player_y & 0xffff);
+			xd_horz = FPMUL(yd_horz, FPDIV(vx, vy));
+			dist_horz = FPDISTANCE(xd_horz, yd_horz);
+
+			tex_horz = (player_x + xd_horz) & 0xffff;
+			tex_horz_pix = TEX_WIDTH - 1 - (tex_horz * TEX_WIDTH >> 16);
+		} else if (vy < -0x0010) {
+			yd_horz = (player_y & 0xffff);
+			xd_horz = FPMUL(-yd_horz, FPDIV(vx, vy));
+			dist_horz = FPDISTANCE(xd_horz, yd_horz);
+
+			tex_horz = (player_x + xd_horz) & 0xffff;
+			tex_horz_pix = tex_horz * TEX_WIDTH >> 16;
+		} else {
+			/* view vector is horizontal (or close enough) - crossing point is at infinity */
+			dist_horz = 0x8000000;
+			tex_horz_pix = 0;
+		}
+		
+		if (dist_vert < dist_horz) {
+			distance = dist_vert;
+			wall_line = wall + (tex_vert_pix * 8); /* pointer to the texture column to use in this screen column */
+		} else {
+			distance = dist_horz;
+			wall_line = wall + (tex_horz_pix * 8);
+		}
 
 		tex_pos = (0x10000-distance) * TEX_HEIGHT/2; /* current texture y coordinate */
 		tex_step = distance * TEX_HEIGHT / RESY; /* increment to add to tex_pos per screen pixel */
