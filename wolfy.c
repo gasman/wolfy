@@ -11,9 +11,59 @@
 
 #include "wall.h" /* texture stored column-wise: pixel column 0 stored top-to-bottom, then pix column 1 etc */
 
+/*
+static int maze[] = {
+	0b1111111111111111,
+	0b1000000000000001,
+	0b1011101111101101,
+	0b1010000000000101,
+	0b1010111101110101,
+	0b1010100000010101,
+	0b1010100000010101,
+	0b1010100000010101,
+	0b1010000000010101,
+	0b1010101000010101,
+	0b1000100000000101,
+	0b1010111000110101,
+	0b1010000000000101,
+	0b1010111100111101,
+	0b1000000000000001,
+	0b1111111111111111
+};
+*/
+static int maze[] = {
+	0b1010101010101010,
+	0b1010101010101010,
+	0b1010101010101010,
+	0b1010101010101010,
+	
+	0b1010101010101010,
+	0b1010101010101010,
+	0b1010101010101010,
+	0b0000000000000000,
+
+	0b1010101010101010,
+	0b1010101010101010,
+	0b1010101010101010,
+	0b1010101010101010,
+
+	0b1010101010101010,
+	0b1010101010101010,
+	0b1010101010101010,
+	0b1010101010101010,
+};
+#define IS_WALL(x,y) ( (x)<0 || (x) > 0x0f || (y)<0 || (y)>0x0f || ( maze[y] & (1 << (x)) ) )
+
+//#define IS_WALL(x,y) ( (x) < 0 || (x) > 0x000fffff || (y) < 0 || (y) > 0x000fffff)
+
 /* maths operations on 16.16 fixpoint values */
+#define FPFRAC(x) ( (x) & 0xffff )
 #define FPMUL(a,b) ( ( (a)/0x100 ) * ( (b)/0x100 ) )
 #define FPDIV(a,b) ( ( (a) * 0x100 / (b) ) * 0x100 )
+
+/* floating point versions, for sanity checking */
+//#define FPDIV(a,b) ((int)(((((float)(a))/65536) / (((float)(b))/65536)) * 65536))
+//#define FPMUL(a,b) ((int)(((((float)(a))/65536) * (((float)(b))/65536)) * 65536))
 
 /* straight line distance given x/y deltas (i.e. pythagoras) */
 #define FPDISTANCE(x,y) ( iSqrt( FPMUL(x,x) + FPMUL(y,y) ) * 256 )
@@ -41,12 +91,12 @@ void ram(void)
 			case BTN_ENTER:
 				return;
 			case BTN_UP:
-				player_x += o_sin(player_angle)/4;
-				player_y -= o_cos(player_angle)/4;
+				player_x += o_sin(player_angle);
+				player_y -= o_cos(player_angle);
 				break;
 			case BTN_DOWN:
-				player_x -= o_sin(player_angle)/4;
-				player_y += o_cos(player_angle)/4;
+				player_x -= o_sin(player_angle);
+				player_y += o_cos(player_angle);
 				break;
 			case BTN_LEFT:
 				player_angle = (player_angle - 256) & 0x7fff;
@@ -68,6 +118,9 @@ static void render(void)
 	
 	int sin_pa, cos_pa; /* sin/cos of player_angle, fixpoint 16.16 */
 	int vx, vy; /* view ray vector, fixpoint 16.16 */
+	
+	int xstep, ystep; /* amount to increment x position by for every unit travelled in y, and vice versa */
+	int sample_x, sample_y; /* position counter when sampling for wall positions */
 
 	int yd_vert, xd_vert; /* y and x distance to the nearest vertical wall, fixpoint 16.16 */
 	int tex_vert; /* x position within texture at which we hit the wall, fixpoint 16.16 */
@@ -78,6 +131,8 @@ static void render(void)
 	int tex_horz; /* x position within texture at which we hit the wall, fixpoint 16.16 */
 	int tex_horz_pix; /* tex_horz in pixel coordinates (0 to TEX_WIDTH) */
 	int dist_horz; /* distance to horizontal wall */
+
+	int i;
 
 	sin_pa = o_sin(player_angle) << 4;
 	cos_pa = o_cos(player_angle) << 4;
@@ -90,19 +145,37 @@ static void render(void)
 		vy = -cos_pa + sin_pa * x / RESX - sin_pa/2;
 		
 		/* find where this crosses a vertical (integer x) */
-		if (vx > 0x0010) {
-			xd_vert = 0x10000 - (player_x & 0xffff);
-			yd_vert = FPMUL(xd_vert, FPDIV(vy, vx));
+		if (vx > 0x0010) { /* looking to the right */
+			ystep = FPDIV(vy, vx);
+			
+			/* find point of intersection with a vertical grid line at floor(player_x) + 1 */
+			sample_y = player_y + FPMUL(ystep, 0x10000-FPFRAC(player_x));
+			for (i = (player_x >> 16) + 1; i < 16; i++) {
+				if (IS_WALL(i, sample_y >> 16)) break;
+				sample_y += ystep;
+			}
+
+			xd_vert = (i<<16) - player_x;
+			yd_vert = FPMUL(xd_vert, ystep);
 			dist_vert = FPDISTANCE(xd_vert, yd_vert);
 
-			tex_vert = (player_y + yd_vert) & 0xffff;
-			tex_vert_pix = tex_vert * TEX_WIDTH >> 16;
+			tex_vert = FPFRAC(player_y + yd_vert);
+			tex_vert_pix = (tex_vert * TEX_WIDTH) >> 16;
 		} else if (vx < -0x0010) {
-			xd_vert = (player_x & 0xffff);
-			yd_vert = FPMUL(-xd_vert, FPDIV(vy, vx));
+			ystep = FPDIV(vy, -vx);
+
+			/* find point of intersection with a vertical grid line at floor(player_x) */
+			sample_y = player_y + FPMUL(ystep, FPFRAC(player_x));
+			for (i = (player_x >> 16); i >= 0; i--) {
+				if (IS_WALL(i, sample_y >> 16)) break;
+				sample_y += ystep;
+			}
+
+			xd_vert = player_x - (i<<16);
+			yd_vert = FPMUL(xd_vert, ystep);
 			dist_vert = FPDISTANCE(xd_vert, yd_vert);
 
-			tex_vert = (player_y + yd_vert) & 0xffff;
+			tex_vert = FPFRAC(player_y + yd_vert);
 			tex_vert_pix = TEX_WIDTH - 1 - (tex_vert * TEX_WIDTH >> 16);
 		} else {
 			/* view vector is vertical (or close enough) - crossing point is at infinity */
@@ -112,18 +185,18 @@ static void render(void)
 		
 		/* find where this crosses a horizontal (integer y) */
 		if (vy > 0x0010) {
-			yd_horz = 0x10000 - (player_y & 0xffff);
+			yd_horz = 0x10000 - FPFRAC(player_y);
 			xd_horz = FPMUL(yd_horz, FPDIV(vx, vy));
 			dist_horz = FPDISTANCE(xd_horz, yd_horz);
 
-			tex_horz = (player_x + xd_horz) & 0xffff;
+			tex_horz = FPFRAC(player_x + xd_horz);
 			tex_horz_pix = TEX_WIDTH - 1 - (tex_horz * TEX_WIDTH >> 16);
 		} else if (vy < -0x0010) {
-			yd_horz = (player_y & 0xffff);
+			yd_horz = FPFRAC(player_y);
 			xd_horz = FPMUL(-yd_horz, FPDIV(vx, vy));
 			dist_horz = FPDISTANCE(xd_horz, yd_horz);
 
-			tex_horz = (player_x + xd_horz) & 0xffff;
+			tex_horz = FPFRAC(player_x + xd_horz);
 			tex_horz_pix = tex_horz * TEX_WIDTH >> 16;
 		} else {
 			/* view vector is horizontal (or close enough) - crossing point is at infinity */
@@ -131,13 +204,13 @@ static void render(void)
 			tex_horz_pix = 0;
 		}
 		
-		if (dist_vert < dist_horz) {
+		//if (dist_vert < dist_horz) {
 			distance = dist_vert;
 			wall_line = wall + (tex_vert_pix * 8); /* pointer to the texture column to use in this screen column */
-		} else {
-			distance = dist_horz;
-			wall_line = wall + (tex_horz_pix * 8);
-		}
+		//} else {
+		//	distance = dist_horz;
+		//	wall_line = wall + (tex_horz_pix * 8);
+		//}
 
 		tex_pos = (0x10000-distance) * TEX_HEIGHT/2; /* current texture y coordinate */
 		tex_step = distance * TEX_HEIGHT / RESY; /* increment to add to tex_pos per screen pixel */
@@ -171,6 +244,7 @@ static void render(void)
 		}
 		col_buf--;
 	}
+	//fprintf(stderr, "player at (%08x, %08x), angle %d\n", player_x, player_y, player_angle);
 }
 
 //----------------------------------------------
